@@ -1,151 +1,147 @@
-from collections import Counter
-
-from scapy.all import ARP, DNS, ICMP, IP, TCP, UDP, IPv6, rdpcap, sniff
-from scapy.packet import Packet
+from scapy.all import ARP, DNS, ICMP, IP, TCP, UDP, IPv6, Packet, sniff
 
 from tp1.utils.config import logger
-from tp1.utils.detectors import (
-    Attack,
-    detect_arp_spoofing,
-    detect_port_scan,
-    detect_sql_injection,
-    find_flag,
-)
-from tp1.utils.lib import choose_interface
+from tp1.utils.detectors import Attaque, chercher_flag, verifier_arp, verifier_scan, verifier_sql
+from tp1.utils.lib import choisir_interface
 
-# Quels détecteurs lancer pour chaque protocole
-DETECTORS = {
-    "arp": [detect_arp_spoofing],
-    "tcp": [detect_port_scan, detect_sql_injection],
+DETECTEURS = {
+    "arp": [verifier_arp],
+    "tcp": [verifier_scan, verifier_sql],
 }
 
 
-def get_protocol(pkt: Packet) -> str:
-    """
-    Return the protocol name of a packet (ARP, DNS, TCP, UDP, ICMP, IPv6, IP or Other)
-    """
-    for layer, name in ((ARP, "ARP"), (DNS, "DNS"), (TCP, "TCP"), (UDP, "UDP"), (ICMP, "ICMP")):
-        if pkt.haslayer(layer):
-            return name
-    if pkt.haslayer(IPv6):
+def trouver_protocole(paquet: Packet) -> str:
+    """Donne le nom du protocole d'un paquet"""
+    couches = [(ARP, "ARP"), (DNS, "DNS"), (TCP, "TCP"), (UDP, "UDP"), (ICMP, "ICMP")]
+    for couche, nom in couches:
+        if paquet.haslayer(couche):
+            return nom
+    if paquet.haslayer(IPv6):
         return "IPv6"
-    if pkt.haslayer(IP):
+    if paquet.haslayer(IP):
         return "IP"
     return "Other"
 
 
+def prendre_nombre(element: tuple[str, int]) -> int:
+    """Donne le nombre de paquet d'un protocole"""
+    return element[1]
+
+
 class Capture:
-    def __init__(self, interface: str | None = None, pcap_path: str | None = None) -> None:
-        self.pcap_path = pcap_path
-        # Avec un fichier pcap, pas besoin de choisir une interface
-        self.interface = interface or ("" if pcap_path else choose_interface())
-        self.summary = ""
-        self.packets = []
-        self.attacks: list[Attack] = []
-        self.flag = ""
+    """Récupère les paquet et les analyse"""
 
-    def capture_traffic(self, count: int = 0, timeout: int | None = 30) -> None:
-        """
-        Capture network traffic from an interface (or read it from a pcap file)
-        """
-        if self.pcap_path:
-            logger.info(f"Lecture du fichier {self.pcap_path}")
-            self.packets = list(rdpcap(self.pcap_path))
+    def __init__(self, interface: str | None = None, chemin_pcap: str | None = None) -> None:
+        """Prépare la capture"""
+        self.chemin_pcap = chemin_pcap
+        if interface:
+            self.interface = interface
+        elif chemin_pcap:
+            self.interface = ""
         else:
-            logger.info(f"Capture sur l'interface {self.interface} (timeout={timeout}s, count={count})")
-            self.packets = list(sniff(iface=self.interface or None, count=count, timeout=timeout, store=True))
-        logger.info(f"{len(self.packets)} paquet(s) récupéré(s)")
+            self.interface = choisir_interface()
+        self.resume = ""
+        self.paquets: list[Packet] = []
+        self.attaques: list[Attaque] = []
+        self.flag = ""
+        self.erreur = False
 
-    def sort_network_protocols(self) -> dict[str, list]:
-        """
-        Sort and return all captured network protocols (protocol -> packets)
-        """
-        sorted_packets = {}
-        for pkt in self.packets:
-            sorted_packets.setdefault(get_protocol(pkt), []).append(pkt)
-        return sorted_packets
+    def capturer(self, nombre: int = 0, delai: int | None = 30) -> None:
+        """Récupère les paquets"""
+        if self.chemin_pcap:
+            logger.info(f"Lecture du fichier {self.chemin_pcap}")
+            self.paquets = list(sniff(offline=self.chemin_pcap, store=True))
+        else:
+            logger.info(f"Capture sur l'interface {self.interface} (timeout={delai}s, count={nombre})")
+            interface = self.interface or None
+            self.paquets = list(sniff(iface=interface, count=nombre, timeout=delai, store=True))
+        logger.info(f"{len(self.paquets)} paquet(s) récupéré(s)")
 
-    def get_all_protocols(self) -> dict[str, int]:
-        """
-        Return all protocols captured with total packets number
-        """
-        counter = Counter(get_protocol(pkt) for pkt in self.packets)
-        return dict(counter.most_common())
+    def compter_protocoles(self) -> dict[str, int]:
+        """Compte les paquets par protocole"""
+        comptes: dict[str, int] = {}
+        for paquet in self.paquets:
+            nom = trouver_protocole(paquet)
+            if nom in comptes:
+                comptes[nom] += 1
+            else:
+                comptes[nom] = 1
+        liste = sorted(comptes.items(), key=prendre_nombre, reverse=True)
+        return dict(liste)
 
-    def analyse(self, protocols: str = "all") -> None:
-        """
-        Analyse all captured data and return statement
-        Si un trafic est illégitime (exemple : Injection SQL, ARP Spoofing, etc)
-        a Noter la tentative d'attaque.
-        b Relever le protocole ainsi que l'adresse réseau/physique de l'attaquant.
-        c (FACULTATIF) Opérer le blocage de la machine attaquante.
-        Sinon afficher que tout va bien
+    def lancer_detecteurs(self, protocoles: str) -> None:
+        """Lance les détecteurs voulus (arp, tcp, etc...) et garde les attaques trouvées"""
+        voulus = []
+        for nom in protocoles.split(","):
+            voulus.append(nom.strip().lower())
 
-        :param protocols: "all", ou une liste séparée par des virgules ("arp,tcp")
-        """
-        all_protocols = self.get_all_protocols()
-        sort = self.sort_network_protocols()
-        logger.info(f"Protocoles trouvés : {all_protocols}")
-        logger.debug(f"Protocoles triés : {list(sort)}")
-
-        wanted = [name.strip().lower() for name in protocols.split(",")]
-        self.attacks = []
-        for name, detectors in DETECTORS.items():
-            if "all" not in wanted and name not in wanted:
-                logger.info(f"Analyse {name.upper()} ignorée")
+        self.attaques = []
+        for nom in DETECTEURS:
+            if "all" not in voulus and nom not in voulus:
+                logger.info(f"Analyse {nom.upper()} ignorée")
                 continue
-            for detector in detectors:
-                logger.info(f"Lancement de {detector.__name__}")
-                self.attacks += detector(self.packets)
+            for detecteur in DETECTEURS[nom]:
+                logger.info(f"Lancement de {detecteur.__name__}")
+                self.attaques += detecteur(self.paquets)
 
-        for attack in self.attacks:
+    def afficher_attaques(self) -> None:
+        """Écrit chaque attaque trouvée dans les log"""
+        for attaque in self.attaques:
             logger.warning(
-                f"ATTAQUE {attack.type} ({attack.protocol}) - attaquant {attack.attacker} "
-                f"(MAC {attack.mac or '?'}, IP {attack.ip or '?'}) - {attack.detail}"
+                f"ATTAQUE {attaque.type} ({attaque.protocole}) - attaquant {attaque.attaquant} "
+                f"(MAC {attaque.mac or '?'}, IP {attaque.ip or '?'}) - {attaque.detail}"
             )
-        self.flag = find_flag(self.packets, self.attacks)
+
+    def analyser(self, protocoles: str = "all") -> None:
+        """Analyse les paquets : protocoles, attaques, flag et résumé"""
+        comptes = self.compter_protocoles()
+        logger.info(f"Protocoles trouvés : {comptes}")
+
+        self.lancer_detecteurs(protocoles)
+        self.afficher_attaques()
+
+        self.flag = chercher_flag(self.paquets, self.attaques)
         if self.flag:
             logger.info(f"Flag trouvé : {self.flag}")
-        if not self.attacks:
+        if not self.attaques:
             logger.info("Aucune attaque détectée, tout va bien")
 
-        self.summary = self._gen_summary()
+        self.resume = self.faire_resume()
 
-    def get_summary(self) -> str:
-        """
-        Return summary
-        :return:
-        """
-        return self.summary
+    def est_legitime(self, protocole: str) -> bool:
+        """Dit si aucune attaque n'a été trouvée sur ce protocole"""
+        for attaque in self.attaques:
+            if attaque.protocole == protocole:
+                return False
+        return True
 
-    def is_protocol_legit(self, protocol: str) -> bool:
-        """
-        A protocol is legit if no attack was found on it
-        """
-        return all(attack.protocol != protocol for attack in self.attacks)
-
-    def to_report_dict(self) -> dict:
-        """
-        Content of report.json (read by the automatic correction)
-        """
+    def donnees_json(self) -> dict:
+        """Prépare le contenu de report.json """
+        attaques = []
+        for attaque in self.attaques:
+            attaques.append({"type": attaque.type, "attacker": attaque.attaquant})
         return {
-            "protocols": self.get_all_protocols(),
-            "attacks": [{"type": attack.type, "attacker": attack.attacker} for attack in self.attacks],
+            "protocols": self.compter_protocoles(),
+            "attacks": attaques,
             "flag": self.flag,
         }
 
-    def _gen_summary(self) -> str:
-        """
-        Generate summary
-        """
-        protocols = ", ".join(f"{name}: {number}" for name, number in self.get_all_protocols().items())
-        summary = f"{len(self.packets)} paquets analysés ({protocols or 'aucun'}).\n"
-        if not self.attacks:
-            return summary + "Tout va bien : aucun trafic illégitime détecté."
+    def faire_resume(self) -> str:
+        """Ecrit le texte de résumé de l'analyse"""
+        comptes = self.compter_protocoles()
+        morceaux = []
+        for nom in comptes:
+            morceaux.append(f"{nom}: {comptes[nom]}")
+        protocoles = ", ".join(morceaux)
+        if protocoles == "":
+            protocoles = "aucun"
 
-        summary += f"{len(self.attacks)} tentative(s) d'attaque détectée(s) :\n"
-        for attack in self.attacks:
-            summary += (
-                f"- {attack.type} ({attack.protocol}) : MAC {attack.mac}, IP {attack.ip or 'inconnue'}\n"
-            )
-        return summary
+        resume = f"{len(self.paquets)} paquets analysés ({protocoles}).\n"
+        if not self.attaques:
+            return resume + "Tout va bien : aucun trafic illégitime détecté."
+
+        resume += f"{len(self.attaques)} tentative(s) d'attaque détectée(s) :\n"
+        for attaque in self.attaques:
+            ip = attaque.ip or "inconnu"
+            resume += f"- {attaque.type} ({attaque.protocole}) : MAC {attaque.mac}, IP {ip}\n"
+        return resume

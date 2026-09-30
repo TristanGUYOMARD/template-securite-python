@@ -5,10 +5,10 @@ from src.tp1.utils.report import Report
 from tests.tp1 import pcap_factory as factory
 
 
-def analysed_capture() -> Capture:
+def capture_analysee() -> Capture:
     capture = Capture(interface="test0")
-    capture.packets = factory.full_scenario()
-    capture.analyse()
+    capture.paquets = factory.full_scenario()
+    capture.analyser()
     return capture
 
 
@@ -17,78 +17,49 @@ def test_report_init():
     capture = Capture(interface="eth0")
 
     # When
-    report = Report(capture, "test.pdf", "Test summary")
+    report = Report(capture, "Test summary")
 
     # Then
     assert report.capture == capture
-    assert report.filename == "test.pdf"
-    assert report.summary == "Test summary"
-    assert report.array == []
-    assert report.graph == []
+    assert report.resume == "Test summary"
+    assert report.tableau == []
+    assert report.graphique == []
 
 
-def test_generate_array_flags_illegitimate_protocols():
+def test_preparer_tableau_flags_illegitimate_protocols():
     # Given
-    report = Report(analysed_capture(), "test.pdf", "summary")
+    report = Report(capture_analysee(), "summary")
 
     # When
-    report.generate("array")
+    report.preparer_tableau()
 
     # Then
-    status = {protocol: state for protocol, _, _, state in report.array}
+    status = {protocol: state for protocol, _, _, state in report.tableau}
     assert status["ARP"] == "ILLÉGITIME"
     assert status["TCP"] == "ILLÉGITIME"
     assert status["DNS"] == "Légitime"
 
 
-def test_generate_graph_lists_protocol_counts():
+def test_preparer_graphique_lists_protocol_counts():
     # Given
-    report = Report(analysed_capture(), "test.pdf", "summary")
+    report = Report(capture_analysee(), "summary")
 
     # When
-    report.generate("graph")
+    report.preparer_graphique()
 
     # Then
-    assert dict(report.graph)["ARP"] == 8
-
-
-def test_generate_invalid_param_changes_nothing():
-    # Given
-    report = Report(analysed_capture(), "test.pdf", "summary")
-
-    # When
-    report.generate("invalid")
-
-    # Then
-    assert report.graph == []
-    assert report.array == []
-
-
-def test_concat_report_contains_all_parts():
-    # Given
-    report = Report(analysed_capture(), "test.pdf", "Test summary")
-    report.title = "Test Title"
-    report.generate("array")
-    report.generate("graph")
-
-    # When
-    result = report.concat_report()
-
-    # Then
-    assert result.startswith("Test Title")
-    assert "Test summary" in result
-    assert "ARP" in result
+    assert dict(report.graphique)["ARP"] == 8
 
 
 def test_save_writes_a_pdf(tmp_path):
     # Given
-    report = Report(analysed_capture(), "unused.pdf", "Synthèse de test")
-    report.generate("graph")
-    report.generate("array")
+    report = Report(capture_analysee(), "Synthèse de test")
+    report.preparer_graphique()
+    report.preparer_tableau()
     target = tmp_path / "report.pdf"
 
     # When
-    report.save(str(target))
+    report.sauver_pdf(str(target))
 
     # Then
     assert target.read_bytes().startswith(b"%PDF")
@@ -96,11 +67,11 @@ def test_save_writes_a_pdf(tmp_path):
 
 def test_save_json_matches_correction_format(tmp_path):
     # Given
-    report = Report(analysed_capture(), "unused.pdf", "summary")
+    report = Report(capture_analysee(), "summary")
     target = tmp_path / "report.json"
 
     # When
-    report.save_json(str(target))
+    report.sauver_json(str(target))
 
     # Then
     data = json.loads(target.read_text(encoding="utf-8"))
@@ -111,12 +82,29 @@ def test_save_json_matches_correction_format(tmp_path):
 
 def test_save_svg_chart(tmp_path):
     # Given
-    report = Report(analysed_capture(), "unused.pdf", "summary")
-    report.generate("graph")
+    report = Report(capture_analysee(), "summary")
+    report.preparer_graphique()
     target = tmp_path / "protocols.svg"
 
     # When
-    report.save_svg_chart(str(target))
+    report.sauver_svg(str(target))
 
     # Then
     assert "<svg" in target.read_text(encoding="utf-8")
+
+
+def test_empty_capture_report(tmp_path):
+    # Given
+    capture = Capture(interface="test0")
+    capture.analyser()
+    report = Report(capture, capture.resume)
+    report.preparer_graphique()
+    report.preparer_tableau()
+    target = tmp_path / "report.pdf"
+
+    # When
+    report.sauver_pdf(str(target))
+
+    # Then
+    assert report.tableau == []
+    assert target.read_bytes().startswith(b"%PDF")

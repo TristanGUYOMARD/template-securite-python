@@ -80,13 +80,11 @@ Limites : une injection coupée sur plusieurs segments TCP n'est pas reconstitu�
 Le TP se joue dans un environnement jetable, pas directement sur l'hôte. Le `docker-compose.yml` lance le code
 dans un conteneur sans réseau, avec un système de fichiers en lecture seule et sans aucune capability :
 
-```bash
-docker compose build
-docker compose run --rm tests                        # tests unitaires
-docker compose run --rm tp1                          # analyse le pcap du dossier, rapports dans ./out
-PCAP=autre.pcap docker compose run --rm tp1          # avec un autre pcap
-docker compose --profile live run --rm tp1-live      # capture live sur le réseau interne "lab"
-```
+- docker compose build : construit l'image
+- docker compose run --rm tests : lance les tests unitaires
+- docker compose run --rm tp1 : analyse le pcap du dossier, rapports dans ./out
+- PCAP=autre.pcap docker compose run --rm tp1 : même chose avec un autre pcap
+- docker compose --profile live run --rm tp1-live : capture live sur le réseau interne "lab"
 
 ## Tests
 

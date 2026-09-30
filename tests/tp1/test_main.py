@@ -2,13 +2,14 @@ import json
 
 from scapy.all import wrpcap
 
-from src.tp1.main import main, parse_args
+from src.tp1.main import main
+from src.tp1.utils.etapes import lire_arguments
 from tests.tp1 import pcap_factory as factory
 
 
-def test_parse_args_defaults():
+def test_lire_arguments_defaults():
     # When
-    args = parse_args([])
+    args = lire_arguments([])
 
     # Then
     assert args.pcap is None
@@ -18,9 +19,9 @@ def test_parse_args_defaults():
     assert args.timeout == 30
 
 
-def test_parse_args_with_options():
+def test_lire_arguments_with_options():
     # When
-    args = parse_args(["--pcap", "a.pcap", "--out", "x/r.json", "--iface", "eth0", "-c", "5", "-t", "2"])
+    args = lire_arguments(["--pcap", "a.pcap", "--out", "x/r.json", "--iface", "eth0", "-c", "5", "-t", "2"])
 
     # Then
     assert (args.pcap, args.out, args.iface, args.count, args.timeout) == ("a.pcap", "x/r.json", "eth0", 5, 2)
