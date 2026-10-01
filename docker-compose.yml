@@ -1,0 +1,86 @@
+﻿# Laboratoire cloisonné pour le TP1.
+#
+#   docker compose build
+#   docker compose run --rm tests                 # tests unitaires
+#   docker compose run --rm lab-pcap              # génère un PCAP de test dans ./data
+#   docker compose run --rm tp1                   # analyse le pcap du dossier (PCAP=autre.pcap pour changer), sans réseau
+#   docker compose run --rm tests-tp2             # tests du TP2 (données fictives)
+#   docker compose run --rm tp2                   # triage de ./samples/faux.txt (SAMPLE=autre.bin pour changer), lecture seule, sans réseau
+#   docker compose --profile live run --rm tp1-live   # capture live sur le réseau interne du labo
+#
+# Règles communes : aucun accès Internet ni réseau de l'hôte, système de fichiers en lecture seule,
+# toutes les capabilities retirées, pas d'élévation de privilèges.
+x-hardened: &hardened
+  image: esgi-tp1-lab:latest
+  build: .
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: ["/tmp"]
+  environment:
+    PYTHONDONTWRITEBYTECODE: "1"
+
+services:
+  tests:
+    <<: *hardened
+    network_mode: none
+    user: "1000:1000"
+    working_dir: /tmp
+    volumes: [".:/app:ro"]
+    command: ["python", "-m", "pytest", "-p", "no:cacheprovider", "--rootdir=/app", "/app/tests/tp1", "-q"]
+
+  tests-tp2:
+    <<: *hardened
+    network_mode: none
+    user: "1000:1000"
+    working_dir: /tmp
+    volumes: [".:/app:ro"]
+    command: ["python", "-m", "pytest", "-p", "no:cacheprovider", "--rootdir=/app", "/app/tests/tp2", "-q"]
+
+  # Les échantillons sont montés en lecture seule et ne sont jamais exécutés.
+  tp2:
+    <<: *hardened
+    network_mode: none
+    user: "1000:1000"
+    working_dir: /out
+    volumes: [".:/app:ro", "./samples:/samples:ro", "./out:/out"]
+    command: ["python", "-m", "tp2.main", "-f", "/samples/${SAMPLE:-faux.txt}", "--out", "/out"]
+
+  lab-pcap:
+    <<: *hardened
+    network_mode: none
+    user: "1000:1000"
+    working_dir: /tmp
+    volumes: [".:/app:ro", "./data:/data"]
+    command: ["python", "/app/scripts/make_lab_pcap.py", "/data/capture.pcap"]
+
+  tp1:
+    <<: *hardened
+    network_mode: none
+    user: "1000:1000"
+    working_dir: /out
+    volumes: [".:/app:ro", "./out:/out"]
+    command: ["python", "-m", "tp1.main", "--pcap", "/app/${PCAP:-tp1-grp-4-191ba9.pcap}", "--out", "/out/report.json"]
+
+  # Capture live : uniquement sur le réseau "lab" (internal = pas de route vers Internet ni vers l'hôte).
+  # NET_RAW est la seule capability accordée (nécessaire à Scapy pour sniffer).
+  tp1-live:
+    <<: *hardened
+    profiles: ["live"]
+    user: "0:0"
+    cap_add: [NET_RAW]
+    networks: [lab]
+    working_dir: /out
+    volumes: [".:/app:ro", "./out:/out"]
+    command: ["python", "-m", "tp1.main", "--iface", "eth0", "--timeout", "60", "--out", "/out/report.json"]
+
+  # Conteneur attaquant fourni par l'école : à décommenter avec l'image donnée par l'enseignant.
+  # attacker:
+  #   image: <image-fournie-par-l-ecole>
+  #   networks: [lab]
+  #   cap_drop: [ALL]
+  #   security_opt: ["no-new-privileges:true"]
+
+networks:
+  lab:
+    internal: true
